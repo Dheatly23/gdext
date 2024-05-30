@@ -10,7 +10,9 @@ use godot_ffi as sys;
 use crate::builtin::{GString, StringName, Variant};
 use crate::global::{PropertyHint, PropertyUsageFlags};
 use crate::meta::error::ConvertError;
-use crate::meta::{sealed, ClassName, FromGodot, GodotConvert, PropertyInfo, ToGodot};
+use crate::meta::{
+    sealed, ArrayTypeInfo, ClassName, FromGodot, GodotConvert, PropertyInfo, ToGodot,
+};
 use crate::registry::method::MethodParamOrReturnInfo;
 
 // Re-export sys traits in this module, so all are in one place.
@@ -120,4 +122,44 @@ pub trait GodotType:
     label = "does not implement `Var`",
     note = "see also: https://godot-rust.github.io/docs/gdext/master/godot/builtin/meta/trait.ArrayElement.html"
 )]
-pub trait ArrayElement: GodotType {}
+pub trait ArrayElement: GodotType {
+    /// Fallible result type.
+    ///
+    /// Due to inherent limitations of Godot, some array methods _may_ fail.
+    /// In that case, this is the result type.
+    /// For all typed arrays, it will be `()`. Only in `VariantArray` it will be a `Result` type.
+    type FallibleReturn;
+
+    /// Reference version of fallible return.
+    type RefFallibleReturn<'a>;
+
+    #[doc(hidden)]
+    #[inline]
+    fn is_untyped() -> bool {
+        false
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    fn zero_value() -> Variant {
+        Variant::nil()
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn value_is_type(&self, _target_ty: &ArrayTypeInfo) -> bool {
+        true
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    fn fallible_check(self, target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn);
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    fn ref_fallible_check<'a>(
+        &'a self,
+        target_ty: &ArrayTypeInfo,
+    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>);
+}

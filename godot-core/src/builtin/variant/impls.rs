@@ -9,7 +9,7 @@ use super::*;
 use crate::builtin::*;
 use crate::global;
 use crate::meta::error::{ConvertError, FromVariantError};
-use crate::meta::{ArrayElement, GodotFfiVariant, GodotType, PropertyInfo};
+use crate::meta::{ArrayElement, ArrayTypeInfo, GodotFfiVariant, GodotType, PropertyInfo};
 use godot_ffi as sys;
 
 // For godot-cpp, see https://github.com/godotengine/godot-cpp/blob/master/include/godot_cpp/core/type_info.hpp.
@@ -24,7 +24,7 @@ use godot_ffi as sys;
 //
 // Therefore, we can use `init` to indicate when it must be initialized in 4.0.
 macro_rules! impl_ffi_variant {
-    ($T:ty, $from_fn:ident, $to_fn:ident $(; $godot_type_name:ident)?) => {
+    ($T:ty, $from_fn:ident, $to_fn:ident $(, ($default_expr:expr))? $(; $godot_type_name:ident)?) => {
         impl GodotFfiVariant for $T {
             fn ffi_to_variant(&self) -> Variant {
                 let variant = unsafe {
@@ -84,7 +84,38 @@ macro_rules! impl_ffi_variant {
             impl_ffi_variant!(@godot_type_name $T $(, $godot_type_name)?);
         }
 
-        impl ArrayElement for $T {}
+        impl ArrayElement for $T {
+            type FallibleReturn = ();
+            type RefFallibleReturn<'a> = ();
+
+            #[doc(hidden)]
+            #[inline]
+            fn zero_value() -> Variant {
+                impl_ffi_variant!(@default_expr $($default_expr)?).to_variant()
+            }
+
+            #[allow(private_interfaces)]
+            #[doc(hidden)]
+            #[inline]
+            fn fallible_check(self, _target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
+                (Some(self), ())
+            }
+
+            #[allow(private_interfaces)]
+            #[doc(hidden)]
+            #[inline]
+            fn ref_fallible_check<'a> (&'a self, _target_ty: &ArrayTypeInfo) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
+                (Some(self), ())
+            }
+        }
+    };
+
+    (@default_expr) => {
+        Self::default()
+    };
+
+    (@default_expr $default_expr:expr) => {
+        $default_expr
     };
 
     (@godot_type_name $T:ty) => {
@@ -114,7 +145,7 @@ mod impls {
     impl_ffi_variant!(f64, float_to_variant, float_from_variant; float);
     impl_ffi_variant!(Aabb, aabb_to_variant, aabb_from_variant; AABB);
     impl_ffi_variant!(Basis, basis_to_variant, basis_from_variant);
-    impl_ffi_variant!(Callable, callable_to_variant, callable_from_variant);
+    impl_ffi_variant!(Callable, callable_to_variant, callable_from_variant, (Callable::invalid()));
     impl_ffi_variant!(Vector2, vector2_to_variant, vector2_from_variant);
     impl_ffi_variant!(Vector3, vector3_to_variant, vector3_from_variant);
     impl_ffi_variant!(Vector4, vector4_to_variant, vector4_from_variant);
@@ -137,12 +168,12 @@ mod impls {
     #[cfg(since_api = "4.3")]
     impl_ffi_variant!(PackedVector4Array, packed_vector4_array_to_variant, packed_vector4_array_from_variant);
     impl_ffi_variant!(PackedColorArray, packed_color_array_to_variant, packed_color_array_from_variant);
-    impl_ffi_variant!(Plane, plane_to_variant, plane_from_variant);
+    impl_ffi_variant!(Plane, plane_to_variant, plane_from_variant, (Plane::invalid()));
     impl_ffi_variant!(Projection, projection_to_variant, projection_from_variant);
-    impl_ffi_variant!(Rid, rid_to_variant, rid_from_variant; RID);
+    impl_ffi_variant!(Rid, rid_to_variant, rid_from_variant, (Rid::Invalid); RID);
     impl_ffi_variant!(Rect2, rect2_to_variant, rect2_from_variant);
     impl_ffi_variant!(Rect2i, rect2i_to_variant, rect2i_from_variant);
-    impl_ffi_variant!(Signal, signal_to_variant, signal_from_variant);
+    impl_ffi_variant!(Signal, signal_to_variant, signal_from_variant, (Signal::invalid()));
     impl_ffi_variant!(Transform2D, transform_2d_to_variant, transform_2d_from_variant);
     impl_ffi_variant!(Transform3D, transform_3d_to_variant, transform_3d_from_variant);
     impl_ffi_variant!(Dictionary, dictionary_to_variant, dictionary_from_variant);

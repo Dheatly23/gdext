@@ -8,8 +8,8 @@
 use crate::builtin::Variant;
 use crate::meta::error::{ConvertError, FromFfiError, FromVariantError};
 use crate::meta::{
-    ArrayElement, ClassName, FromGodot, GodotConvert, GodotNullableFfi, GodotType, PropertyInfo,
-    ToGodot,
+    ArrayElement, ArrayTypeInfo, ClassName, FromGodot, GodotConvert, GodotNullableFfi, GodotType,
+    PropertyInfo, ToGodot,
 };
 use crate::registry::method::MethodParamOrReturnInfo;
 use godot_ffi as sys;
@@ -206,7 +206,30 @@ macro_rules! impl_godot_scalar {
     };
 
     (@shared_traits; $T:ty) => {
-        impl ArrayElement for $T {}
+        impl ArrayElement for $T {
+            type FallibleReturn = ();
+            type RefFallibleReturn<'a> = ();
+
+            #[doc(hidden)]
+            #[inline]
+            fn zero_value() -> Variant {
+                Self::default().to_variant()
+            }
+
+            #[allow(private_interfaces)]
+            #[doc(hidden)]
+            #[inline]
+            fn fallible_check(self, _: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
+                (Some(self), ())
+            }
+
+            #[allow(private_interfaces)]
+            #[doc(hidden)]
+            #[inline]
+            fn ref_fallible_check<'a> (&'a self, _: &ArrayTypeInfo) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
+                (Some(self), ())
+            }
+        }
 
         impl GodotConvert for $T {
             type Via = $T;

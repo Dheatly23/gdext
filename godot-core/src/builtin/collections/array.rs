@@ -108,6 +108,7 @@ use sys::{ffi_methods, interface_fn, GodotFfi};
 pub struct Array<T: ArrayElement> {
     // Safety Invariant: The type of all values in `opaque` matches the type `T`.
     opaque: sys::types::OpaqueArray,
+    cached_type: Option<ArrayTypeInfo>,
     _phantom: PhantomData<T>,
 }
 
@@ -150,6 +151,7 @@ impl<T: ArrayElement> Array<T> {
         // Note: type is not yet checked at this point, because array has not yet been initialized!
         Self {
             opaque,
+            cached_type: None,
             _phantom: PhantomData,
         }
     }
@@ -196,11 +198,13 @@ impl<T: ArrayElement> Array<T> {
 
     /// Returns `true` if the array contains the given value. Equivalent of `has` in GDScript.
     pub fn contains(&self, value: &T) -> bool {
+        // Contravariance safety: unequal type will be unequal
         self.as_inner().has(value.to_variant())
     }
 
     /// Returns the number of times a value is in the array.
     pub fn count(&self, value: &T) -> usize {
+        // Contravariance safety: unequal type will be unequal
         to_usize(self.as_inner().count(value.to_variant()))
     }
 
@@ -271,7 +275,18 @@ impl<T: ArrayElement> Array<T> {
     /// # Panics
     ///
     /// If `index` is out of bounds.
-    pub fn set(&mut self, index: usize, value: T) {
+    pub fn set(&mut self, index: usize, value: T) -> T::FallibleReturn {
+        match value.fallible_check(self.cached_type_info()) {
+            (Some(v), r) => {
+                // SAFETY: Value type has been checked.
+                unsafe { self.set_unchecked(index, v) };
+                r
+            }
+            (None, r) => r,
+        }
+    }
+
+    unsafe fn set_unchecked(&mut self, index: usize, value: T) {
         let ptr_mut = self.ptr_mut(index);
 
         // SAFETY: `ptr_mut` just checked that the index is not out of bounds.
@@ -285,18 +300,28 @@ impl<T: ArrayElement> Array<T> {
     /// _Godot equivalents: `append` and `push_back`_
     #[doc(alias = "append")]
     #[doc(alias = "push_back")]
-    pub fn push(&mut self, value: T) {
+    pub fn push(&mut self, value: T) -> T::FallibleReturn {
+        let (value, ret) = match value.fallible_check(self.cached_type_info()) {
+            (Some(v), r) => (v, r),
+            (None, r) => return r,
+        };
         // SAFETY: The array has type `T` and we're writing a value of type `T` to it.
         unsafe { self.as_inner_mut() }.push_back(value.to_variant());
+        ret
     }
 
     /// Adds an element at the beginning of the array, in O(n).
     ///
     /// On large arrays, this method is much slower than [`push()`][Self::push], as it will move all the array's elements.
     /// The larger the array, the slower `push_front()` will be.
-    pub fn push_front(&mut self, value: T) {
+    pub fn push_front(&mut self, value: T) -> T::FallibleReturn {
+        let (value, ret) = match value.fallible_check(self.cached_type_info()) {
+            (Some(v), r) => (v, r),
+            (None, r) => return r,
+        };
         // SAFETY: The array has type `T` and we're writing a value of type `T` to it.
         unsafe { self.as_inner_mut() }.push_front(value.to_variant());
+        ret
     }
 
     /// Removes and returns the last element of the array. Returns `None` if the array is empty.
@@ -330,7 +355,11 @@ impl<T: ArrayElement> Array<T> {
     ///
     /// # Panics
     /// If `index > len()`.
-    pub fn insert(&mut self, index: usize, value: T) {
+    pub fn insert(&mut self, index: usize, value: T) -> T::FallibleReturn {
+        let (value, ret) = match value.fallible_check(self.cached_type_info()) {
+            (Some(v), r) => (v, r),
+            (None, r) => return r,
+        };
         let len = self.len();
         assert!(
             index <= len,
@@ -339,6 +368,7 @@ impl<T: ArrayElement> Array<T> {
 
         // SAFETY: The array has type `T` and we're writing a value of type `T` to it.
         unsafe { self.as_inner_mut() }.insert(to_i64(index), value.to_variant());
+        ret
     }
 
     /// ⚠️ Removes and returns the element at the specified index. Equivalent of `pop_at` in GDScript.
@@ -371,9 +401,14 @@ impl<T: ArrayElement> Array<T> {
 
     /// Assigns the given value to all elements in the array. This can be used together with
     /// `resize` to create an array with a given size and initialized elements.
-    pub fn fill(&mut self, value: &T) {
+    pub fn fill<'a>(&mut self, value: &'a T) -> T::RefFallibleReturn<'a> {
+        let (value, ret) = match value.ref_fallible_check(self.cached_type_info()) {
+            (Some(v), r) => (v, r),
+            (None, r) => return r,
+        };
         // SAFETY: The array has type `T` and we're writing values of type `T` to it.
         unsafe { self.as_inner_mut() }.fill(value.to_variant());
+        ret
     }
 
     /// Resizes the array to contain a different number of elements.
@@ -382,7 +417,11 @@ impl<T: ArrayElement> Array<T> {
     /// then the new elements are set to `value`.
     ///
     /// If you know that the new size is smaller, then consider using [`shrink`](Array::shrink) instead.
-    pub fn resize(&mut self, new_size: usize, value: &T) {
+    pub fn resize<'a>(&mut self, new_size: usize, value: &'a T) -> T::RefFallibleReturn<'a> {
+        let (value, ret) = match value.ref_fallible_check(self.cached_type_info()) {
+            (Some(v), r) => (v, r),
+            (None, r) => return r,
+        };
         let original_size = self.len();
 
         // SAFETY: While we do insert `Variant::nil()` if the new size is larger, we then fill it with `value` ensuring that all values in the
@@ -391,8 +430,10 @@ impl<T: ArrayElement> Array<T> {
 
         // If new_size < original_size then this is an empty iterator and does nothing.
         for i in original_size..new_size {
-            self.set(i, value.to_godot());
+            // SAFETY: Value type has been checked.
+            unsafe { self.set_unchecked(i, value.to_godot()) };
         }
+        ret
     }
 
     /// Shrinks the array down to `new_size`.
@@ -413,7 +454,17 @@ impl<T: ArrayElement> Array<T> {
     }
 
     /// Appends another array at the end of this array. Equivalent of `append_array` in GDScript.
-    pub fn extend_array(&mut self, other: Array<T>) {
+    ///
+    /// Returns `true` if operation succeed. It can _only_ fail on `VariantArray`, not typed arrays.
+    pub fn extend_array(&mut self, mut other: Array<T>) -> bool {
+        if T::is_untyped() {
+            let self_ty = self.cached_type_info();
+            let other_ty = other.cached_type_info();
+            // Truly variant array will always be able to be assigned.
+            if self_ty.is_typed() && *self_ty != *other_ty {
+                return false;
+            }
+        }
         // SAFETY: `append_array` will only read values from `other`, and all types can be converted to `Variant`.
         let other: VariantArray = unsafe { other.assume_type::<Variant>() };
 
@@ -421,6 +472,7 @@ impl<T: ArrayElement> Array<T> {
         // to be of type `T`.
         let mut inner_self = unsafe { self.as_inner_mut() };
         inner_self.append_array(other);
+        true
     }
 
     /// Returns a shallow copy of the array. All array elements are copied, but any reference types
@@ -750,11 +802,17 @@ impl<T: ArrayElement> Array<T> {
     }
 
     /// Checks that the inner array has the correct type set on it for storing elements of type `T`.
-    fn with_checked_type(self) -> Result<Self, ConvertError> {
+    fn with_checked_type(mut self) -> Result<Self, ConvertError> {
+        if T::is_untyped() {
+            self.cached_type_info();
+            return Ok(self);
+        }
+
         let self_ty = self.type_info();
         let target_ty = ArrayTypeInfo::of::<T>();
 
         if self_ty == target_ty {
+            self.cached_type = Some(target_ty);
             Ok(self)
         } else {
             Err(FromGodotError::BadArrayType {
@@ -789,6 +847,15 @@ impl<T: ArrayElement> Array<T> {
             }
         }
     }
+
+    /// Get cached type info, if possible.
+    fn cached_type_info(&mut self) -> &ArrayTypeInfo {
+        if self.cached_type.is_none() {
+            self.cached_type = Some(self.type_info());
+        }
+        // SAFETY: Cached type is already set
+        unsafe { self.cached_type.as_ref().unwrap_unchecked() }
+    }
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------------------------
@@ -821,7 +888,27 @@ unsafe impl<T: ArrayElement> GodotFfi for Array<T> {
 }
 
 // Only implement for untyped arrays; typed arrays cannot be nested in Godot.
-impl ArrayElement for VariantArray {}
+impl ArrayElement for VariantArray {
+    type FallibleReturn = ();
+    type RefFallibleReturn<'a> = ();
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn fallible_check(self, _target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
+        (Some(self), ())
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn ref_fallible_check<'a>(
+        &'a self,
+        _target_ty: &ArrayTypeInfo,
+    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
+        (Some(self), ())
+    }
+}
 
 impl<T: ArrayElement> GodotConvert for Array<T> {
     type Via = Self;
@@ -883,7 +970,7 @@ impl<T: ArrayElement + fmt::Display> fmt::Display for Array<T> {
 impl<T: ArrayElement> Clone for Array<T> {
     fn clone(&self) -> Self {
         // SAFETY: `self` is a valid array, since we have a reference that keeps it alive.
-        let array = unsafe {
+        let mut array = unsafe {
             Self::new_with_uninit(|self_ptr| {
                 let ctor = sys::builtin_fn!(array_construct_copy);
                 let args = [self.sys()];
@@ -891,9 +978,14 @@ impl<T: ArrayElement> Clone for Array<T> {
             })
         };
 
+        array.cached_type = match &self.cached_type {
+            None => None,
+            Some(v) => Some(ArrayTypeInfo {
+                variant_type: v.variant_type,
+                class_name: v.class_name.clone(),
+            }),
+        };
         array
-            .with_checked_type()
-            .expect("copied array should have same type as original array")
     }
 }
 
@@ -1053,8 +1145,13 @@ impl<T: ArrayElement + ToGodot> From<&[T]> for Array<T> {
         // the array was created in this function, and we do not access the array while this slice exists, the slice has unique
         // access to the elements.
         let elements = unsafe { Variant::borrow_slice_mut(array.ptr_mut(0), len) };
+        let cached_type = array.cached_type_info();
         for (element, array_slot) in slice.iter().zip(elements.iter_mut()) {
-            *array_slot = element.to_variant();
+            // The only case this will fail is on untyped array.
+            // But in that case, it's already null value and that's valid.
+            if let (Some(v), _) = element.ref_fallible_check(cached_type) {
+                *array_slot = v.to_variant();
+            }
         }
 
         array
@@ -1079,7 +1176,7 @@ impl<T: ArrayElement + ToGodot> Extend<T> for Array<T> {
         // A faster implementation using `resize()` and direct pointer writes might still be
         // possible.
         for item in iter.into_iter() {
-            self.push(item);
+            let _ = self.push(item);
         }
     }
 }

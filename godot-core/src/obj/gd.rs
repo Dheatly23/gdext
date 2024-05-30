@@ -15,7 +15,9 @@ use sys::{static_assert_eq_size_align, VariantType};
 use crate::builtin::{Callable, NodePath, StringName, Variant};
 use crate::global::PropertyHint;
 use crate::meta::error::{ConvertError, FromFfiError};
-use crate::meta::{ArrayElement, CallContext, FromGodot, GodotConvert, GodotType, ToGodot};
+use crate::meta::{
+    ArrayElement, ArrayTypeInfo, CallContext, FromGodot, GodotConvert, GodotType, ToGodot,
+};
 use crate::obj::raw::RawGd;
 use crate::obj::{
     bounds, cap, Bounds, EngineEnum, GdDerefTarget, GdMut, GdRef, GodotClass, Inherits, InstanceId,
@@ -659,8 +661,49 @@ impl<T: GodotClass> GodotType for Gd<T> {
     }
 }
 
-impl<T: GodotClass> ArrayElement for Gd<T> {}
-impl<T: GodotClass> ArrayElement for Option<Gd<T>> {}
+impl<T: GodotClass> ArrayElement for Gd<T> {
+    type FallibleReturn = ();
+    type RefFallibleReturn<'a> = ();
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn fallible_check(self, _target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
+        (Some(self), ())
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn ref_fallible_check<'a>(
+        &'a self,
+        _target_ty: &ArrayTypeInfo,
+    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
+        (Some(self), ())
+    }
+}
+
+impl<T: GodotClass> ArrayElement for Option<Gd<T>> {
+    type FallibleReturn = ();
+    type RefFallibleReturn<'a> = ();
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn fallible_check(self, _target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
+        (Some(self), ())
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn ref_fallible_check<'a>(
+        &'a self,
+        _target_ty: &ArrayTypeInfo,
+    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
+        (Some(self), ())
+    }
+}
 
 impl<T> Default for Gd<T>
 where

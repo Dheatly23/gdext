@@ -6,8 +6,10 @@
  */
 
 use crate::builtin::{GString, StringName, VariantDispatch, VariantOperator, VariantType};
+use crate::classes::Object;
 use crate::meta::error::ConvertError;
-use crate::meta::{ArrayElement, FromGodot, ToGodot};
+use crate::meta::{ArrayElement, ArrayTypeInfo, FromGodot, ToGodot};
+use crate::obj::Gd;
 use godot_ffi as sys;
 use std::{fmt, ptr};
 use sys::{ffi_methods, interface_fn, GodotFfi};
@@ -18,7 +20,7 @@ mod impls;
 ///
 /// While Godot variants do not appear very frequently in Rust due to their lack of compile-time type-safety, they are central to all sorts of
 /// dynamic APIs. For example, if you want to call a method on an object based on a string, you will need variants to store arguments and return
-/// value.  
+/// value.
 ///
 /// See also [Godot documentation for `Variant`](https://docs.godotengine.org/en/stable/classes/class_variant.html).
 // We rely on the layout of `Variant` being the same as Godot's layout in `borrow_slice` and `borrow_slice_mut`.
@@ -376,7 +378,56 @@ impl Variant {
     }
 }
 
-impl ArrayElement for Variant {}
+impl ArrayElement for Variant {
+    type FallibleReturn = Result<(), Self>;
+    type RefFallibleReturn<'a> = Result<(), &'a Self>;
+
+    #[doc(hidden)]
+    #[inline]
+    fn is_untyped() -> bool {
+        true
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn value_is_type(&self, target_ty: &ArrayTypeInfo) -> bool {
+        if target_ty.is_typed() && self.get_type() != target_ty.variant_type {
+            false
+        } else if target_ty.variant_type == VariantType::OBJECT {
+            self.to::<Gd<Object>>()
+                .is_class((&target_ty.class_name).into())
+        } else {
+            // All other types can be checked by it's variant type.
+            true
+        }
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn fallible_check(self, target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
+        if self.value_is_type(target_ty) {
+            (Some(self), Ok(()))
+        } else {
+            (None, Err(self))
+        }
+    }
+
+    #[allow(private_interfaces)]
+    #[doc(hidden)]
+    #[inline]
+    fn ref_fallible_check<'a>(
+        &'a self,
+        target_ty: &ArrayTypeInfo,
+    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
+        if self.value_is_type(target_ty) {
+            (Some(self), Ok(()))
+        } else {
+            (None, Err(self))
+        }
+    }
+}
 
 // SAFETY:
 // `from_opaque` properly initializes a dereferenced pointer to an `OpaqueVariant`.
