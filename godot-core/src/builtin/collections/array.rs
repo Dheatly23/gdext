@@ -266,6 +266,9 @@ impl<T: ArrayElement> Array<T> {
 
     /// Clears the array, removing all elements.
     pub fn clear(&mut self) {
+        if self.is_read_only() {
+            return;
+        }
         // SAFETY: No new values are written to the array, we only remove values from the array.
         unsafe { self.as_inner_mut() }.clear();
     }
@@ -275,24 +278,20 @@ impl<T: ArrayElement> Array<T> {
     /// # Panics
     ///
     /// If `index` is out of bounds.
-    pub fn set(&mut self, index: usize, value: T) -> T::FallibleReturn {
-        match value.fallible_check(self.cached_type_info()) {
-            (Some(v), r) => {
-                // SAFETY: Value type has been checked.
-                unsafe { self.set_unchecked(index, v) };
-                r
-            }
-            (None, r) => r,
+    pub fn set(&mut self, index: usize, value: T) -> Result<(), T> {
+        if !value.value_is_type(self.cached_type_info()) || self.is_read_only() {
+            return Err(value);
         }
+        // SAFETY: Value type has been checked.
+        unsafe { self.set_unchecked(index, value) };
+        Ok(())
     }
 
     unsafe fn set_unchecked(&mut self, index: usize, value: T) {
         let ptr_mut = self.ptr_mut(index);
 
         // SAFETY: `ptr_mut` just checked that the index is not out of bounds.
-        unsafe {
-            value.to_variant().move_into_var_ptr(ptr_mut);
-        }
+        value.to_variant().move_into_var_ptr(ptr_mut);
     }
 
     /// Appends an element to the end of the array.
@@ -300,28 +299,26 @@ impl<T: ArrayElement> Array<T> {
     /// _Godot equivalents: `append` and `push_back`_
     #[doc(alias = "append")]
     #[doc(alias = "push_back")]
-    pub fn push(&mut self, value: T) -> T::FallibleReturn {
-        let (value, ret) = match value.fallible_check(self.cached_type_info()) {
-            (Some(v), r) => (v, r),
-            (None, r) => return r,
-        };
+    pub fn push(&mut self, value: T) -> Result<(), T> {
+        if !value.value_is_type(self.cached_type_info()) || self.is_read_only() {
+            return Err(value);
+        }
         // SAFETY: The array has type `T` and we're writing a value of type `T` to it.
         unsafe { self.as_inner_mut() }.push_back(value.to_variant());
-        ret
+        Ok(())
     }
 
     /// Adds an element at the beginning of the array, in O(n).
     ///
     /// On large arrays, this method is much slower than [`push()`][Self::push], as it will move all the array's elements.
     /// The larger the array, the slower `push_front()` will be.
-    pub fn push_front(&mut self, value: T) -> T::FallibleReturn {
-        let (value, ret) = match value.fallible_check(self.cached_type_info()) {
-            (Some(v), r) => (v, r),
-            (None, r) => return r,
-        };
+    pub fn push_front(&mut self, value: T) -> Result<(), T> {
+        if !value.value_is_type(self.cached_type_info()) || self.is_read_only() {
+            return Err(value);
+        }
         // SAFETY: The array has type `T` and we're writing a value of type `T` to it.
         unsafe { self.as_inner_mut() }.push_front(value.to_variant());
-        ret
+        Ok(())
     }
 
     /// Removes and returns the last element of the array. Returns `None` if the array is empty.
@@ -329,7 +326,7 @@ impl<T: ArrayElement> Array<T> {
     /// _Godot equivalent: `pop_back`_
     #[doc(alias = "pop_back")]
     pub fn pop(&mut self) -> Option<T> {
-        (!self.is_empty()).then(|| {
+        (!self.is_empty() && !self.is_read_only()).then(|| {
             // SAFETY: We do not write any values to the array, we just remove one.
             let variant = unsafe { self.as_inner_mut() }.pop_back();
             T::from_variant(&variant)
@@ -341,7 +338,7 @@ impl<T: ArrayElement> Array<T> {
     /// Note: On large arrays, this method is much slower than `pop()` as it will move all the
     /// array's elements. The larger the array, the slower `pop_front()` will be.
     pub fn pop_front(&mut self) -> Option<T> {
-        (!self.is_empty()).then(|| {
+        (!self.is_empty() && !self.is_read_only()).then(|| {
             // SAFETY: We do not write any values to the array, we just remove one.
             let variant = unsafe { self.as_inner_mut() }.pop_front();
             T::from_variant(&variant)
@@ -355,11 +352,10 @@ impl<T: ArrayElement> Array<T> {
     ///
     /// # Panics
     /// If `index > len()`.
-    pub fn insert(&mut self, index: usize, value: T) -> T::FallibleReturn {
-        let (value, ret) = match value.fallible_check(self.cached_type_info()) {
-            (Some(v), r) => (v, r),
-            (None, r) => return r,
-        };
+    pub fn insert(&mut self, index: usize, value: T) -> Result<(), T> {
+        if !value.value_is_type(self.cached_type_info()) || self.is_read_only() {
+            return Err(value);
+        }
         let len = self.len();
         assert!(
             index <= len,
@@ -368,7 +364,7 @@ impl<T: ArrayElement> Array<T> {
 
         // SAFETY: The array has type `T` and we're writing a value of type `T` to it.
         unsafe { self.as_inner_mut() }.insert(to_i64(index), value.to_variant());
-        ret
+        Ok(())
     }
 
     /// ⚠️ Removes and returns the element at the specified index. Equivalent of `pop_at` in GDScript.
@@ -381,6 +377,7 @@ impl<T: ArrayElement> Array<T> {
     /// If `index` is out of bounds.
     #[doc(alias = "pop_at")]
     pub fn remove(&mut self, index: usize) -> T {
+        self.assert_writable();
         self.check_bounds(index);
 
         // SAFETY: We do not write any values to the array, we just remove one.
@@ -395,20 +392,22 @@ impl<T: ArrayElement> Array<T> {
     /// On large arrays, this method is much slower than [`pop()`][Self::pop], as it will move all the array's
     /// elements after the removed element.
     pub fn erase(&mut self, value: &T) {
+        if self.is_read_only() {
+            return;
+        }
         // SAFETY: We don't write anything to the array.
         unsafe { self.as_inner_mut() }.erase(value.to_variant());
     }
 
     /// Assigns the given value to all elements in the array. This can be used together with
     /// `resize` to create an array with a given size and initialized elements.
-    pub fn fill<'a>(&mut self, value: &'a T) -> T::RefFallibleReturn<'a> {
-        let (value, ret) = match value.ref_fallible_check(self.cached_type_info()) {
-            (Some(v), r) => (v, r),
-            (None, r) => return r,
-        };
+    pub fn fill<'a>(&mut self, value: &'a T) -> Result<(), &'a T> {
+        if !value.value_is_type(self.cached_type_info()) || self.is_read_only() {
+            return Err(value);
+        }
         // SAFETY: The array has type `T` and we're writing values of type `T` to it.
         unsafe { self.as_inner_mut() }.fill(value.to_variant());
-        ret
+        Ok(())
     }
 
     /// Resizes the array to contain a different number of elements.
@@ -417,11 +416,10 @@ impl<T: ArrayElement> Array<T> {
     /// then the new elements are set to `value`.
     ///
     /// If you know that the new size is smaller, then consider using [`shrink`](Array::shrink) instead.
-    pub fn resize<'a>(&mut self, new_size: usize, value: &'a T) -> T::RefFallibleReturn<'a> {
-        let (value, ret) = match value.ref_fallible_check(self.cached_type_info()) {
-            (Some(v), r) => (v, r),
-            (None, r) => return r,
-        };
+    pub fn resize<'a>(&mut self, new_size: usize, value: &'a T) -> Result<(), &'a T> {
+        if !value.value_is_type(self.cached_type_info()) || self.is_read_only() {
+            return Err(value);
+        }
         let original_size = self.len();
 
         // SAFETY: While we do insert `Variant::nil()` if the new size is larger, we then fill it with `value` ensuring that all values in the
@@ -433,7 +431,7 @@ impl<T: ArrayElement> Array<T> {
             // SAFETY: Value type has been checked.
             unsafe { self.set_unchecked(i, value.to_godot()) };
         }
-        ret
+        Ok(())
     }
 
     /// Shrinks the array down to `new_size`.
@@ -443,7 +441,7 @@ impl<T: ArrayElement> Array<T> {
     /// If you want to increase the size of the array, use [`resize`](Array::resize) instead.
     #[doc(alias = "resize")]
     pub fn shrink(&mut self, new_size: usize) -> bool {
-        if new_size >= self.len() {
+        if new_size >= self.len() || self.is_read_only() {
             return false;
         }
 
@@ -457,6 +455,9 @@ impl<T: ArrayElement> Array<T> {
     ///
     /// Returns `true` if operation succeed. It can _only_ fail on `VariantArray`, not typed arrays.
     pub fn extend_array(&mut self, mut other: Array<T>) -> bool {
+        if self.is_read_only() {
+            return false;
+        }
         if T::is_untyped() {
             let self_ty = self.cached_type_info();
             let other_ty = other.cached_type_info();
@@ -648,6 +649,9 @@ impl<T: ArrayElement> Array<T> {
 
     /// Reverses the order of the elements in the array.
     pub fn reverse(&mut self) {
+        if self.is_read_only() {
+            return;
+        }
         // SAFETY: We do not write any values that don't already exist in the array, so all values have the correct type.
         unsafe { self.as_inner_mut() }.reverse();
     }
@@ -658,6 +662,9 @@ impl<T: ArrayElement> Array<T> {
     /// This means that values considered equal may have their order changed when using `sort_unstable`.
     #[doc(alias = "sort")]
     pub fn sort_unstable(&mut self) {
+        if self.is_read_only() {
+            return;
+        }
         // SAFETY: We do not write any values that don't already exist in the array, so all values have the correct type.
         unsafe { self.as_inner_mut() }.sort();
     }
@@ -670,6 +677,9 @@ impl<T: ArrayElement> Array<T> {
     /// This means that values considered equal may have their order changed when using `sort_unstable_custom`.
     #[doc(alias = "sort_custom")]
     pub fn sort_unstable_custom(&mut self, func: Callable) {
+        if self.is_read_only() {
+            return;
+        }
         // SAFETY: We do not write any values that don't already exist in the array, so all values have the correct type.
         unsafe { self.as_inner_mut() }.sort_custom(func);
     }
@@ -678,8 +688,32 @@ impl<T: ArrayElement> Array<T> {
     /// global random number generator common to methods such as `randi`. Call `randomize` to
     /// ensure that a new seed will be used each time if you want non-reproducible shuffling.
     pub fn shuffle(&mut self) {
+        if self.is_read_only() {
+            return;
+        }
         // SAFETY: We do not write any values that don't already exist in the array, so all values have the correct type.
         unsafe { self.as_inner_mut() }.shuffle();
+    }
+
+    /// Returns `true` if array is read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.as_inner().is_read_only()
+    }
+
+    fn assert_writable(&self) {
+        if !self.is_read_only() {
+            panic!("Array is read-only");
+        }
+    }
+
+    /// Marks array as read-only.
+    ///
+    /// Operation is idempotent (calling it twice is the same as calling it once).
+    /// Once marked, cannot be reverted.
+    /// Does not apply to inner content (e.g nested arrays).
+    pub fn make_read_only(&mut self) {
+        // SAFETY: We do not use any T type.
+        unsafe { self.as_inner_mut() }.make_read_only()
     }
 
     /// Asserts that the given index refers to an existing element.
@@ -888,27 +922,7 @@ unsafe impl<T: ArrayElement> GodotFfi for Array<T> {
 }
 
 // Only implement for untyped arrays; typed arrays cannot be nested in Godot.
-impl ArrayElement for VariantArray {
-    type FallibleReturn = ();
-    type RefFallibleReturn<'a> = ();
-
-    #[allow(private_interfaces)]
-    #[doc(hidden)]
-    #[inline]
-    fn fallible_check(self, _target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
-        (Some(self), ())
-    }
-
-    #[allow(private_interfaces)]
-    #[doc(hidden)]
-    #[inline]
-    fn ref_fallible_check<'a>(
-        &'a self,
-        _target_ty: &ArrayTypeInfo,
-    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
-        (Some(self), ())
-    }
-}
+impl ArrayElement for VariantArray {}
 
 impl<T: ArrayElement> GodotConvert for Array<T> {
     type Via = Self;
@@ -978,13 +992,10 @@ impl<T: ArrayElement> Clone for Array<T> {
             })
         };
 
-        array.cached_type = match &self.cached_type {
-            None => None,
-            Some(v) => Some(ArrayTypeInfo {
-                variant_type: v.variant_type,
-                class_name: v.class_name.clone(),
-            }),
-        };
+        array.cached_type = self.cached_type.as_ref().map(|v| ArrayTypeInfo {
+            variant_type: v.variant_type,
+            class_name: v.class_name.clone(),
+        });
         array
     }
 }
@@ -1147,11 +1158,7 @@ impl<T: ArrayElement + ToGodot> From<&[T]> for Array<T> {
         let elements = unsafe { Variant::borrow_slice_mut(array.ptr_mut(0), len) };
         let cached_type = array.cached_type_info();
         for (element, array_slot) in slice.iter().zip(elements.iter_mut()) {
-            // The only case this will fail is on untyped array.
-            // But in that case, it's already null value and that's valid.
-            if let (Some(v), _) = element.ref_fallible_check(cached_type) {
-                *array_slot = v.to_variant();
-            }
+            *array_slot = element.to_variant();
         }
 
         array
@@ -1170,6 +1177,10 @@ impl<T: ArrayElement + ToGodot> FromIterator<T> for Array<T> {
 /// Extends a `Array` with the contents of an iterator.
 impl<T: ArrayElement + ToGodot> Extend<T> for Array<T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        if self.is_read_only() {
+            // No need to iterate.
+            return;
+        }
         // Unfortunately the GDExtension API does not offer the equivalent of `Vec::reserve`.
         // Otherwise we could use it to pre-allocate based on `iter.size_hint()`.
         //
@@ -1290,7 +1301,7 @@ macro_rules! array {
         {
             let mut array = $crate::builtin::Array::default();
             $(
-                array.push($elements);
+                let _ = array.push($elements);
             )*
             array
         }
@@ -1319,7 +1330,7 @@ macro_rules! varray {
             use $crate::meta::ToGodot as _;
             let mut array = $crate::builtin::VariantArray::default();
             $(
-                array.push($elements.to_variant());
+                let _ = array.push($elements.to_variant());
             )*
             array
         }

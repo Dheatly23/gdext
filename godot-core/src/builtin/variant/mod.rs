@@ -379,9 +379,6 @@ impl Variant {
 }
 
 impl ArrayElement for Variant {
-    type FallibleReturn = Result<(), Self>;
-    type RefFallibleReturn<'a> = Result<(), &'a Self>;
-
     #[doc(hidden)]
     #[inline]
     fn is_untyped() -> bool {
@@ -400,31 +397,6 @@ impl ArrayElement for Variant {
         } else {
             // All other types can be checked by it's variant type.
             true
-        }
-    }
-
-    #[allow(private_interfaces)]
-    #[doc(hidden)]
-    #[inline]
-    fn fallible_check(self, target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn) {
-        if self.value_is_type(target_ty) {
-            (Some(self), Ok(()))
-        } else {
-            (None, Err(self))
-        }
-    }
-
-    #[allow(private_interfaces)]
-    #[doc(hidden)]
-    #[inline]
-    fn ref_fallible_check<'a>(
-        &'a self,
-        target_ty: &ArrayTypeInfo,
-    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>) {
-        if self.value_is_type(target_ty) {
-            (Some(self), Ok(()))
-        } else {
-            (None, Err(self))
         }
     }
 }

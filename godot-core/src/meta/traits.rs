@@ -123,26 +123,10 @@ pub trait GodotType:
     note = "see also: https://godot-rust.github.io/docs/gdext/master/godot/builtin/meta/trait.ArrayElement.html"
 )]
 pub trait ArrayElement: GodotType {
-    /// Fallible result type.
-    ///
-    /// Due to inherent limitations of Godot, some array methods _may_ fail.
-    /// In that case, this is the result type.
-    /// For all typed arrays, it will be `()`. Only in `VariantArray` it will be a `Result` type.
-    type FallibleReturn;
-
-    /// Reference version of fallible return.
-    type RefFallibleReturn<'a>;
-
     #[doc(hidden)]
     #[inline]
     fn is_untyped() -> bool {
         false
-    }
-
-    #[doc(hidden)]
-    #[inline]
-    fn zero_value() -> Variant {
-        Variant::nil()
     }
 
     #[allow(private_interfaces)]
@@ -151,15 +135,4 @@ pub trait ArrayElement: GodotType {
     fn value_is_type(&self, _target_ty: &ArrayTypeInfo) -> bool {
         true
     }
-
-    #[allow(private_interfaces)]
-    #[doc(hidden)]
-    fn fallible_check(self, target_ty: &ArrayTypeInfo) -> (Option<Self>, Self::FallibleReturn);
-
-    #[allow(private_interfaces)]
-    #[doc(hidden)]
-    fn ref_fallible_check<'a>(
-        &'a self,
-        target_ty: &ArrayTypeInfo,
-    ) -> (Option<&'a Self>, Self::RefFallibleReturn<'a>);
 }
